@@ -9,7 +9,7 @@ from src.tools.fabric_tool import query_fabric_data_agent
 
 async def run_query(question: str) -> str:
     """
-    Orchestrate a single question through the FinSAGE agent and return the answer.
+    Orchestrate a single question through the Trucking agent and return the answer.
 
     A new Agent context is created per request to keep calls stateless.
     """
@@ -21,7 +21,7 @@ async def run_query(question: str) -> str:
 
     async with Agent(
         client=foundry_client,
-        name="FabricDataAnalyst",
+        name="TruckingDataAnalyst",
         instructions=SYSTEM_PROMPT,
         tools=[query_fabric_data_agent],
     ) as agent:
