@@ -6,6 +6,14 @@ from src.infrastructure.identity import credential
 from src.prompts.system import SYSTEM_PROMPT
 from src.tools.fabric_tool import query_fabric_data_agent
 
+# Created once at module level — reuses the underlying HTTP connection pool
+# and token cache across all requests instead of rebuilding it per call.
+_foundry_client = FoundryChatClient(
+    project_endpoint=settings.foundry_project_endpoint,
+    model=settings.foundry_model_deployment_name,
+    credential=credential,
+)
+
 
 async def run_query(question: str) -> str:
     """
@@ -13,14 +21,8 @@ async def run_query(question: str) -> str:
 
     A new Agent context is created per request to keep calls stateless.
     """
-    foundry_client = FoundryChatClient(
-        project_endpoint=settings.foundry_project_endpoint,
-        model=settings.foundry_model_deployment_name,
-        credential=credential,
-    )
-
     async with Agent(
-        client=foundry_client,
+        client=_foundry_client,
         name="TruckingDataAnalyst",
         instructions=SYSTEM_PROMPT,
         tools=[query_fabric_data_agent],

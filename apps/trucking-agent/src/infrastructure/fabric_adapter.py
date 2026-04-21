@@ -1,7 +1,7 @@
 import uuid
 
 import requests
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from src.infrastructure.identity import credential
 
@@ -45,7 +45,7 @@ def get_or_create_thread(data_agent_url: str, thread_name: str) -> dict:
     base_url = _normalize_base_url(data_agent_url)
     url = f'{base_url}/threads/fabric?tag="{thread_name}"'
 
-    response = requests.get(url, headers=_build_headers(), timeout=30)
+    response = requests.get(url, headers=_build_headers(), timeout=300)
     response.raise_for_status()
 
     thread = response.json()
@@ -53,10 +53,15 @@ def get_or_create_thread(data_agent_url: str, thread_name: str) -> dict:
     return thread
 
 
-def build_openai_client(data_agent_url: str) -> OpenAI:
-    """Create an OpenAI client configured to route requests to the Fabric Data Agent."""
+def build_openai_client(data_agent_url: str) -> tuple[AsyncOpenAI, float]:
+    """Create an AsyncOpenAI client configured to route requests to the Fabric Data Agent.
+
+    Returns:
+        A tuple of (client, token_expires_at) where token_expires_at is a Unix
+        timestamp so callers can decide when to rebuild the client.
+    """
     token = credential.get_token(_FABRIC_SCOPE)
-    return OpenAI(
+    client = AsyncOpenAI(
         api_key="",  # not used — Fabric authenticates via Bearer token
         base_url=data_agent_url,
         default_query={"api-version": "2024-05-01-preview"},
@@ -67,3 +72,4 @@ def build_openai_client(data_agent_url: str) -> OpenAI:
             "ActivityId": str(uuid.uuid4()),
         },
     )
+    return client, float(token.expires_on)
