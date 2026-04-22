@@ -1,96 +1,118 @@
-import asyncio
-import time
-import uuid
-
-from openai import AsyncOpenAI
+import json
+import re
+from typing import Any
 
 from src.infrastructure.config import settings
-from src.infrastructure.fabric_adapter import build_openai_client, get_or_create_thread
+from src.infrastructure.fabric_adapter import get_fabric_client
 
-# Rebuild the client this many seconds before the token actually expires.
-_TOKEN_REFRESH_BUFFER = 300
-
-_openai_client: AsyncOpenAI | None = None
-_client_expires_at: float = 0.0
-_assistant_id: str | None = None
+# Stores the raw Fabric run from the most recent tool call so the console
+# (or any other caller) can display steps and SQL without a second API call.
+_last_run_data: dict[str, Any] | None = None
 
 
-def _get_client() -> AsyncOpenAI:
-    """Return the cached AsyncOpenAI client, rebuilding it when the token is near expiry."""
-    global _openai_client, _client_expires_at
-    if _openai_client is None or time.time() >= _client_expires_at - _TOKEN_REFRESH_BUFFER:
-        _openai_client, _client_expires_at = build_openai_client(settings.data_agent_url)
-    return _openai_client
+def get_last_run_data() -> dict[str, Any] | None:
+    """Return the raw run data from the most recent query_fabric_data_agent call."""
+    return _last_run_data
 
 
-async def _get_assistant_id(client: AsyncOpenAI) -> str:
-    """Return the cached assistant ID, creating one on first call."""
-    global _assistant_id
-    if _assistant_id is None:
-        assistant = await client.beta.assistants.create(model="not used")
-        _assistant_id = assistant.id
-    return _assistant_id
+def _extract_answer(messages_dump: dict) -> str:
+    """Pull the last assistant message text out of a raw messages dump."""
+    for msg in messages_dump.get("data", []):
+        if msg.get("role") == "assistant":
+            for block in msg.get("content", []):
+                if isinstance(block, dict):
+                    text = block.get("text", {})
+                    if isinstance(text, dict):
+                        return text.get("value", "")
+                    return str(text)
+    return "No answer returned by the Fabric Data Agent."
+
+
+def _format_steps(steps_dump: dict) -> list[str]:
+    """Return a human-readable summary line for each run step."""
+    lines: list[str] = []
+    for i, step in enumerate(steps_dump.get("data", []), start=1):
+        step_type = step.get("type", "unknown")
+        status = step.get("status", "")
+        details = step.get("step_details", {})
+
+        if step_type == "message_creation":
+            msg_id = details.get("message_creation", {}).get("message_id", "")
+            lines.append(f"  [{i}] message_creation (status={status}) message_id={msg_id}")
+        elif step_type == "tool_calls":
+            for tc in details.get("tool_calls", []):
+                fn_name = tc.get("function", {}).get("name", tc.get("type", "tool"))
+                tc_status = tc.get("status", status)
+                lines.append(f"  [{i}] tool_call: {fn_name} (status={tc_status})")
+        else:
+            lines.append(f"  [{i}] {step_type} (status={status})")
+    return lines
+
+
+def _extract_sql_from_steps(steps_dump: dict) -> list[str]:
+    """Return a deduplicated list of SQL strings found in run steps."""
+    sql_pattern = re.compile(
+        r'(SELECT\s.+?FROM\s.+?)(?=[}\'"\n;]|$)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    seen: set[str] = set()
+    queries: list[str] = []
+    for step in steps_dump.get("data", []):
+        details = step.get("step_details", {})
+        for tool_call in details.get("tool_calls", []):
+            # Check function arguments and output
+            for source in (
+                tool_call.get("function", {}).get("arguments", ""),
+                tool_call.get("output", "") or "",
+            ):
+                for match in sql_pattern.findall(str(source)):
+                    clean = re.sub(r"\s+", " ", match.strip().replace("\\n", "\n"))
+                    if clean not in seen:
+                        seen.add(clean)
+                        queries.append(clean)
+    return queries
 
 
 async def query_fabric_data_agent(question: str) -> str:
     """
     Query the Microsoft Fabric Data Agent with a natural language question.
 
-    Use this tool whenever the user asks about data, metrics, tables, or reports
-    that reside in the Microsoft Fabric Data Agent.
+    Always use this tool whenever the user asks about data, metrics, tables,
+    reports, or anything that requires querying the Fabric Data Agent.
+
+    Returns a structured response that always includes:
+      - RUN_STATUS: completed / failed / timed_out
+      - ANSWER: the agent's plain-text answer
+      - STEPS: ordered list of reasoning/tool-call steps the agent took
+      - SQL_QUERIES: the SQL statements the agent executed (if any)
+      - ERROR: error message if the run failed
 
     Args:
         question: The natural language question to send to the Fabric Data Agent.
-
-    Returns:
-        The data agent's text response.
     """
-    client = _get_client()
-    assistant_id = await _get_assistant_id(client)
+    client = get_fabric_client(settings.data_agent_url)
+    raw = await client.get_run_details(question)
 
-    thread_name = f"trucking-{uuid.uuid4()}"
-    thread = await asyncio.to_thread(get_or_create_thread, settings.data_agent_url, thread_name)
+    global _last_run_data
+    _last_run_data = raw
 
-    await client.beta.threads.messages.create(
-        thread_id=thread["id"],
-        role="user",
-        content=question,
-    )
+    if raw.get("run_status") != "completed":
+        error = raw.get("error", "Unknown error")
+        return f"RUN_STATUS: {raw.get('run_status', 'failed')}\nERROR: {error}"
 
-    run = await client.beta.threads.runs.create(
-        thread_id=thread["id"],
-        assistant_id=assistant_id,
-    )
+    steps_dump = raw.get("run_steps", {})
+    answer = _extract_answer(raw.get("messages", {}))
+    step_lines = _format_steps(steps_dump)
+    sql_queries = raw.get("sql_queries", [])  # already extracted by get_run_details
 
-    deadline = time.time() + 120
-    while run.status in ("queued", "in_progress"):
-        if time.time() > deadline:
-            return "Request to Fabric Data Agent timed out."
-        await asyncio.sleep(2)
-        run = await client.beta.threads.runs.retrieve(
-            thread_id=thread["id"],
-            run_id=run.id,
-        )
+    parts = [
+        f"RUN_STATUS: {raw.get('run_status', 'unknown')}",
+        f"ANSWER:\n{answer}",
+    ]
+    if step_lines:
+        parts.append("STEPS:\n" + "\n".join(step_lines))
+    if sql_queries:
+        formatted = "\n\n".join(f"  [{i+1}] {q}" for i, q in enumerate(sql_queries))
+        parts.append(f"SQL_QUERIES:\n{formatted}")
 
-    messages = await client.beta.threads.messages.list(
-        thread_id=thread["id"],
-        order="asc",
-    )
-
-    responses: list[str] = []
-    for msg in messages.data:
-        if msg.role == "assistant":
-            try:
-                content = msg.content[0]
-                responses.append(
-                    content.text.value if hasattr(content, "text") else str(content)
-                )
-            except (IndexError, AttributeError):
-                responses.append(str(msg.content))
-
-    try:
-        await client.beta.threads.delete(thread_id=thread["id"])
-    except Exception:
-        pass
-
-    return "\n".join(responses) if responses else "No response received from the Fabric Data Agent."
+    return "\n\n".join(parts)

@@ -12,7 +12,7 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 
 @router.post("/query", response_model=QueryResponse)
 async def query_agent(request: QueryRequest) -> QueryResponse:
-    """Submit a natural language question to the FinSAGE data agent."""
+    """Submit a natural language question to the Trucking data agent."""
     session_id = request.session_id or str(uuid.uuid4())
     log_query_received(session_id, request.question)
 
