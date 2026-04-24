@@ -4,11 +4,13 @@ import asyncio
 import time
 import uuid
 import warnings
+import logging
 
 import aiohttp
 from openai import AsyncOpenAI
-
 from src.infrastructure.identity import credential
+
+logger = logging.getLogger(__name__)
 
 # Suppress OpenAI Assistants API deprecation warnings —
 # Fabric Data Agents don't support the newer Responses API yet.

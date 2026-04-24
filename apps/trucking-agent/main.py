@@ -1,11 +1,14 @@
 import argparse
 import asyncio
 import itertools
+import logging
 import sys
 import threading
 import time
 
 import uvicorn
+
+logging.basicConfig(level=logging.INFO)
 
 
 def _spinner(stop_event: threading.Event, message: str = "Working") -> None:
@@ -22,7 +25,7 @@ def _spinner(stop_event: threading.Event, message: str = "Working") -> None:
 
 async def interactive_console() -> None:
     from src.application.agent_runner import run_query
-    from src.tools.fabric_tool import get_last_run_data
+    from src.tools.fabric_data_agent_http_tool import get_last_run_data
 
     print("Trucking Agent — interactive console. Type 'exit' or 'quit' to stop.\n")
     while True:
@@ -64,7 +67,7 @@ async def interactive_console() -> None:
 
 def _print_run_details(run_data: dict, elapsed: float = 0.0) -> None:
     """Print a formatted run-details block (steps + SQL + data previews) after the agent answer."""
-    from src.tools.fabric_tool import _format_steps
+    from src.tools.fabric_data_agent_http_tool import _format_steps
 
     sep = "─" * 60
     print(sep)

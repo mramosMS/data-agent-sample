@@ -3,7 +3,7 @@ import re
 from typing import Any
 
 from src.infrastructure.config import settings
-from src.infrastructure.fabric_adapter import get_fabric_client
+from src.infrastructure.fabric_openai_adapter import get_fabric_client
 
 # Stores the raw Fabric run from the most recent tool call so the console
 # (or any other caller) can display steps and SQL without a second API call.

@@ -4,7 +4,16 @@ from agent_framework.foundry import FoundryChatClient
 from src.infrastructure.config import settings
 from src.infrastructure.identity import credential
 from src.prompts.system import SYSTEM_PROMPT
-from src.tools.fabric_tool import query_fabric_data_agent
+from src.tools.fabric_data_agent_http_tool import query_fabric_data_agent
+from src.tools.fabric_data_agent_rpc_tool import get_fabric_data_agent_tools
+
+TOOL_REGISTRY = {
+    "fabric_data_agent": lambda user_id: [get_fabric_data_agent_tools(user_id)],
+    "fabric_query": lambda user_id: [query_fabric_data_agent],
+}
+
+def _get_tools(user_id: str):
+    return TOOL_REGISTRY[settings.tool_mode](user_id)
 
 # Created once at module level — reuses the underlying HTTP connection pool
 # and token cache across all requests instead of rebuilding it per call.
@@ -25,7 +34,7 @@ async def run_query(question: str) -> str:
         client=_foundry_client,
         name="TruckingDataAnalyst",
         instructions=SYSTEM_PROMPT,
-        tools=[query_fabric_data_agent],
+        tools=_get_tools("test_user"),
     ) as agent:
         response = await agent.run(question)
         return response.text
