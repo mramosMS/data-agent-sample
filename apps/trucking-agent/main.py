@@ -8,7 +8,7 @@ import time
 
 import uvicorn
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 
 
 def _spinner(stop_event: threading.Event, message: str = "Working") -> None:
