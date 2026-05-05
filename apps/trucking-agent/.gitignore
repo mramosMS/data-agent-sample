@@ -11,3 +11,6 @@ wheels/
 
 # Environment variables
 .env
+
+# IDE - JetBrains (IntelliJ IDEA, PyCharm, etc.)
+.idea/
